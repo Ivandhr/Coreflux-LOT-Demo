@@ -1,0 +1,22 @@
+apiVersion: 1
+
+# SECURITY NOTE: For production deployments, use environment variables or secrets management
+# instead of hardcoding passwords. For demo/evaluation purposes, this is acceptable.
+# Example: Use ${TIMESCALEDB_PASSWORD} with environment variable substitution
+
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    access: proxy
+    url: timescaledb:5432
+    database: metrics
+    user: postgres
+    secureJsonData:
+      password: timescale
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    isDefault: true
+    editable: true
+

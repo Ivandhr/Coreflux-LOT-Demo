@@ -1,0 +1,160 @@
+
+services:
+  coreflux-broker:
+    image: coreflux/coreflux-mqtt-broker-t:${COREFLUX_TAG:-latest}
+    container_name: ${COREFLUX_CONTAINER_NAME:-coreflux-broker}
+    hostname: ${COREFLUX_HOSTNAME:-coreflux-broker}
+    restart: unless-stopped
+
+    ports:
+      - "${HTTP_PORT:-8080}:80"       # Webserver
+      - "${MQTT_PORT:-1883}:1883"     # MQTT
+      - "${MQTTS_PORT:-8883}:8883"    # MQTT TLS
+      - "${API_PORT:-5000}:5000"      # Websocket
+      - "${HTTPS_PORT:-443}:443"      # Websocket TLS
+    
+    volumes:
+      - ./config/coreflux/config:/var/lib/coreflux
+      - ./config/coreflux/data:/etc/coreflux
+    
+    networks:
+      - coreflux-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  coreflux-glances:
+    image: nicolargo/glances:${GLANCES_TAG:-latest-full}
+    container_name: ${GLANCES_CONTAINER_NAME:-coreflux-glances}
+    hostname: ${GLANCES_HOSTNAME:-coreflux-glances}
+    restart: unless-stopped
+
+    ports:
+      - "${GLANCES_WEB_PORT:-61208}:61208"
+
+    environment:
+      TZ: ${TZ:-America/Chicago}
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/glances/glances.conf:/glances/conf/glances.conf:ro
+      - ./config/glances/start.sh:/start.sh:ro
+
+    networks:
+      - coreflux-network
+
+    command: ["/bin/sh", "/start.sh"]
+
+    depends_on:
+      coreflux-broker: { condition: service_healthy }
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ${TIMESCALEDB_CONTAINER_NAME:-coreflux-timescaledb}
+    hostname: ${TIMESCALEDB_HOSTNAME:-timescaledb}
+    restart: unless-stopped
+
+    ports:
+      - "${TIMESCALEDB_PORT:-5432}:5432"
+
+    environment:
+      POSTGRES_USER: ${TIMESCALEDB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-timescale}
+      POSTGRES_DB: ${TIMESCALEDB_DB:-metrics}
+      TZ: ${TZ:-America/Chicago}
+
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./config/timescaledb/init:/docker-entrypoint-initdb.d
+
+    networks:
+      - coreflux-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ${PGADMIN_CONTAINER_NAME:-coreflux-pgadmin}
+    hostname: ${PGADMIN_HOSTNAME:-pgadmin}
+    restart: unless-stopped
+
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      TZ: ${TZ:-America/Chicago}
+
+    volumes:
+      - ./config/pgadmin:/var/lib/pgadmin
+
+    networks:
+      - coreflux-network
+
+    depends_on:
+      timescaledb: { condition: service_healthy }
+
+  mqtt-explorer:
+    image: smeagolworms4/mqtt-explorer:latest
+    container_name: ${MQTT_EXPLORER_CONTAINER_NAME:-coreflux-mqtt-explorer}
+    hostname: ${MQTT_EXPLORER_HOSTNAME:-mqtt-explorer}
+    restart: unless-stopped
+
+    ports:
+      - "${MQTT_EXPLORER_PORT:-4000}:4000"
+
+    networks:
+      - coreflux-network
+
+    depends_on:
+      coreflux-broker: { condition: service_healthy }
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_TAG:-latest}
+    container_name: ${GRAFANA_CONTAINER_NAME:-coreflux-grafana}
+    hostname: ${GRAFANA_HOSTNAME:-grafana}
+    restart: unless-stopped
+
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-password}
+      GF_INSTALL_PLUGINS: ""
+      TZ: ${TZ:-America/Chicago}
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+
+    networks:
+      - coreflux-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    depends_on:
+      timescaledb: { condition: service_healthy }
+
+networks:
+  coreflux-network:
+
+volumes:
+  timescaledb-data:
+  grafana-data:

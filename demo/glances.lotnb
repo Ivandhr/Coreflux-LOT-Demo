@@ -1,0 +1,187 @@
+[
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "# 🎓 Building a Real-Time System Monitoring Platform with CoreFlux LOT\n\n## Tutorial Overview\n\nWelcome to this hands-on tutorial where we'll build a complete **system monitoring and alerting platform** using CoreFlux Language of Things (LOT). This notebook demonstrates how to transform raw system metrics into actionable intelligence using event-driven IoT orchestration.\n\n### What You'll Learn\n\n1. **Data Modeling** - How to create reusable data structures for IoT telemetry\n2. **Event Processing** - Transform raw MQTT messages into structured metrics\n3. **Business Logic** - Implement intelligent alerting with conditional rules\n4. **Database Integration** - Persist time-series data and run analytics\n5. **Real-Time Aggregation** - Calculate rolling statistics from streaming data\n\n### The Problem We're Solving\n\nImagine you're managing a fleet of servers running the **Glances** monitoring tool. Each server publishes system metrics (CPU, memory, uptime) to MQTT topics in a raw, inconsistent format. You need to:\n\n- ✅ Normalize and enrich incoming data\n- ✅ Detect anomalies and send alerts\n- ✅ Store metrics in a time-series database\n- ✅ Calculate real-time aggregates for dashboards\n\n### Architecture Flow\n\n```\nGlances Sensors → MQTT Topics → LOT Actions (Transform) → \n  ├─→ Normalized Metrics → Database (TimescaleDB)\n  ├─→ Alert Actions (Evaluate) → Alert Topics → Database\n  └─→ Time-Series Queries → Aggregation Results\n```\n\nLet's begin by defining our data models!"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---\n\n## Part 1: Data Models - The Foundation of Type Safety\n\nIn LOT, **Models** are structured data schemas that ensure consistency across your IoT ecosystem. Think of them as \"contracts\" that define what data looks like as it flows through your system.\n\n### Why Models Matter\n\n- 🔒 **Type Safety**: Catch data errors at design-time, not runtime\n- 📐 **Standardization**: Ensure all systems speak the same language\n- 🔄 **Reusability**: Define once, use everywhere\n- 📊 **Self-Documentation**: Models describe your data architecture\n\n### The Inheritance Hierarchy\n\nWe'll create a base model with common fields, then extend it for specific metric types:"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 🧱 Base Model: Common Metadata\n\nEvery metric needs these core fields to provide context. This is the parent class for all specialized models."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE MODEL base COLLAPSED\r\n    ADD STRING \"timestamp\"\r\n    ADD STRING \"hostname\"\r\n    ADD STRING \"metric\""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---"
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE MODEL numericValue FROM base COLLAPSED\r\n    ADD DOUBLE \"value\"\r\n    ADD STRING \"unitOfMeasure\""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**Best Practice**: Always include the unit of measure with numeric values to prevent dangerous assumptions. Is that `90` a percentage or a raw count?\n\n---"
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE MODEL stringValue FROM base COLLAPSED\r\n    ADD STRING \"value\""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---"
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE MODEL timeValue FROM base COLLAPSED\r\n    ADD INT \"hour\"\r\n    ADD INT \"minute\"\r\n    ADD INT \"second\"\r\n    ADD INT \"value\""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**Pro Tip**: Always store the raw value (total seconds) alongside human-readable components. This allows precise calculations while maintaining readability.\n\n---"
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE MODEL Alert FROM base COLLAPSED\r\n    ADD STRING \"alert_id\"\r\n    ADD STRING \"severity\"\r\n    ADD STRING \"message\"\r\n    ADD DOUBLE \"current_value\"\r\n    ADD DOUBLE \"threshold\""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**Best Practice**: Include both the current value and threshold in alert messages so operators can assess severity without checking additional systems.\n\n✅ **Models Complete!** You've just created a type-safe schema for your entire monitoring system."
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---\n\n## Part 2: Data Transformation - From Raw Sensor Data to Structured Metrics\n\nNow comes the exciting part! **Actions** are LOT's event handlers - they react to MQTT messages and transform data in real-time.\n\n### The Glances Integration Challenge\n\nGlances publishes raw numeric values to topics like:\n```\nglances/server-01/cpu/total → 42.7\nglances/server-01/mem/percent → 68.3\n```\n\nWe need to:\n1. **Extract** the hostname from the topic path\n2. **Enrich** the data with timestamps and metadata\n3. **Restructure** it into our `numericValue` model\n4. **Republish** to standardized topics\n\nLet's see how LOT makes this elegant:"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 🔄 Action 1: CPU Metric Transformer\n\nThis action intercepts raw CPU metrics and transforms them into our standard format."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ACTION Glances_Mapping_CPU\r\nON TOPIC \"glances/+/cpu/total\" DO\r\n\r\n    SET \"hostname\" WITH TOPIC POSITION 2\r\n    SET \"value\" WITH PAYLOAD\r\n    SET \"unitOfMeasure\" WITH \"%\"\r\n    SET \"timestamp\" WITH TIMESTAMP \"UTC\"\r\n    \r\n    PUBLISH MODEL numericValue TO \"metrics/\" + {hostname} + \"/system/cpu\" WITH\r\n        value = {value},\r\n        unitOfMeasure = {unitOfMeasure},\r\n        metric = \"cpu total\",\r\n        hostname = {hostname},\r\n        timestamp = {timestamp}\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**What Just Happened?**\n\n1. 📥 **Topic Pattern Matching**: The `+` wildcard lets one action handle all servers\n2. 🔍 **Dynamic Extraction**: `TOPIC POSITION` parses the hostname without regex\n3. ⏰ **Automatic Timestamps**: `TIMESTAMP \"UTC\"` adds temporal context\n4. 📤 **Model Enforcement**: `PUBLISH MODEL` validates against our schema\n5. 🎯 **Topic Reorganization**: Raw sensor topics → standardized metric hierarchy\n\n**Before**: `glances/server-01/cpu/total` → `42.7`  \n**After**: `metrics/server-01/system/cpu` → `{\"value\": 42.7, \"unitOfMeasure\": \"%\", \"metric\": \"cpu total\", ...}`"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 💾 Action 2: Memory Metric Transformer\n\nAlmost identical to CPU, but demonstrates how to reuse patterns across metric types."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ACTION Glances_Mapping_Memory\r\nON TOPIC \"glances/+/mem/percent\" DO\r\n\r\n    SET \"hostname\" WITH TOPIC POSITION 2\r\n    SET \"value\" WITH PAYLOAD\r\n    SET \"unitOfMeasure\" WITH \"%\"\r\n    SET \"timestamp\" WITH TIMESTAMP \"UTC\"\r\n    \r\n    PUBLISH MODEL numericValue TO \"metrics/\" + {hostname} + \"/system/memory\" WITH\r\n        value = {value},\r\n        unitOfMeasure = {unitOfMeasure},\r\n        metric = \"memory percent\",\r\n        hostname = {hostname},\r\n        timestamp = {timestamp}\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "This transformation pattern is reusable across different metric types - simply adjust the topic pattern and metric name for disk, network, or other system metrics."
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### ⏳ Action 3: Uptime Transformer (Advanced)\n\nThis demonstrates LOT's computational capabilities - converting raw seconds into readable time components."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ACTION Glances_Mapping_Uptime\r\nON TOPIC \"glances/+/uptime/seconds\" DO\r\n\r\n    SET \"hostname\" WITH TOPIC POSITION 2\r\n    SET \"total_seconds\" WITH PAYLOAD\r\n    SET \"timestamp\" WITH TIMESTAMP \"UTC\"\r\n    \r\n    PUBLISH MODEL timeValue TO \"metrics/\" + {hostname} + \"/uptime\" WITH\r\n        hour = ({total_seconds} / 3600),\r\n        minute = (({total_seconds} % 3600) / 60),\r\n        second = ({total_seconds} % 60),\r\n        value = {total_seconds},\r\n        metric = \"system uptime\",\r\n        hostname = {hostname},\r\n        timestamp = {timestamp}\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**Math Breakdown**: For an uptime of `7265` seconds:\n- **Hours**: `7265 / 3600 = 2` hours\n- **Minutes**: `(7265 % 3600) / 60 = 1265 / 60 = 21` minutes  \n- **Seconds**: `7265 % 60 = 5` seconds\n- **Result**: 2h 21m 5s"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---\n\n## Part 3: Intelligent Alerting - Turning Metrics into Actions\n\nData is useless without actionability. These actions implement **threshold-based alerting** with severity levels.\n\n### The Alerting Philosophy\n\n1. **WARNING** (25% threshold): Early signal - investigate when convenient\n2. **CRITICAL** (50% threshold): Immediate action required - page the on-call engineer\n\n### Key Design Decisions\n\n- ✅ Subscribe to **normalized metrics** (not raw Glances data)\n- ✅ Parse JSON payloads (since metrics are published as models)\n- ✅ Use conditional logic (`IF/ELSE IF`) for severity tiering\n- ✅ Generate unique alert IDs for tracking and deduplication"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 🚨 Action 4: CPU Threshold Monitor\n\nDemonstrates multi-level alerting with conditional logic."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ACTION CPU_Alert\r\nON TOPIC \"metrics/+/system/cpu\" DO\r\n\r\n    SET \"threshold_critical\" WITH 50.0\r\n    SET \"threshold_warning\" WITH 25.0\r\n\r\n    SET \"hostname\" WITH (GET JSON \"hostname\" IN PAYLOAD AS STRING)\r\n    SET \"cpu_value\" WITH (GET JSON \"value\" IN PAYLOAD AS STRING)\r\n    SET \"timestamp\" WITH (GET JSON \"timestamp\" IN PAYLOAD AS STRING)\r\n\r\n    SET \"last_state\" WITH (GET TOPIC \"alerts/cpu/\" + {hostname} + \"/state\")\r\n\r\n    IF {cpu_value} > {threshold_critical} THEN\r\n\r\n        IF {last_state} != \"critical\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/cpu/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"CRITICAL\"\r\n                hostname = {hostname}\r\n                metric = \"cpu_usage\"\r\n                message = \"CRITICAL: CPU on \" + {hostname} + \" crossed \" + {threshold_critical} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {cpu_value}\r\n                threshold = {threshold_critical}\r\n\r\n            PUBLISH TOPIC \"alerts/cpu/\" + {hostname} + \"/state\" WITH \"critical\"\r\n\r\n    ELSE IF {cpu_value} > {threshold_warning} THEN\r\n\r\n        IF {last_state} != \"warning\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/cpu/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"WARNING\"\r\n                hostname = {hostname}\r\n                metric = \"cpu_usage\"\r\n                message = \"WARNING: CPU on \" + {hostname} + \" crossed \" + {threshold_warning} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {cpu_value}\r\n                threshold = {threshold_warning}\r\n\r\n            PUBLISH TOPIC \"alerts/cpu/\" + {hostname} + \"/state\" WITH \"warning\"\r\n\r\n    ELSE\r\n\r\n        IF {last_state} == \"critical\" OR {last_state} == \"warning\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/cpu/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"INFO\"\r\n                hostname = {hostname}\r\n                metric = \"cpu_usage\"\r\n                message = \"INFO: CPU on \" + {hostname} + \" has recovered below \" + {threshold_warning} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {cpu_value}\r\n                threshold = {threshold_warning}\r\n\r\n            PUBLISH TOPIC \"alerts/cpu/\" + {hostname} + \"/state\" WITH \"ok\"\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "**Best Practice**: Notice there's no `ELSE` clause. If CPU is below 25%, we don't publish anything - reducing alert noise when systems are healthy."
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 💾 Action 5: Memory Threshold Monitor\n\nIdentical pattern to CPU alerts - demonstrating consistency in alert design."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ACTION Memory_Alert\r\nON TOPIC \"metrics/+/system/memory\" DO\r\n\r\n    SET \"threshold_critical\" WITH 50.0\r\n    SET \"threshold_warning\" WITH 25.0\r\n    \r\n    SET \"hostname\" WITH (GET JSON \"hostname\" IN PAYLOAD AS STRING)\r\n    SET \"mem_value\" WITH (GET JSON \"value\" IN PAYLOAD AS STRING)\r\n    SET \"timestamp\" WITH (GET JSON \"timestamp\" IN PAYLOAD AS STRING)\r\n\r\n    SET \"last_state\" WITH (GET TOPIC \"alerts/memory/\" + {hostname} + \"/state\")\r\n\r\n    IF {mem_value} > {threshold_critical} THEN\r\n\r\n        IF {last_state} != \"critical\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/memory/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"CRITICAL\"\r\n                hostname = {hostname}\r\n                metric = \"memory_usage\"\r\n                message = \"CRITICAL: Memory on \" + {hostname} + \" crossed \" + {threshold_critical} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {mem_value}\r\n                threshold = {threshold_critical}\r\n\r\n            PUBLISH TOPIC \"alerts/memory/\" + {hostname} + \"/state\" WITH \"critical\"\r\n\r\n    ELSE IF {mem_value} > {threshold_warning} THEN\r\n\r\n        IF {last_state} != \"warning\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/memory/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"WARNING\"\r\n                hostname = {hostname}\r\n                metric = \"memory_usage\"\r\n                message = \"WARNING: Memory on \" + {hostname} + \" crossed \" + {threshold_warning} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {mem_value}\r\n                threshold = {threshold_warning}\r\n\r\n            PUBLISH TOPIC \"alerts/memory/\" + {hostname} + \"/state\" WITH \"warning\"\r\n\r\n    ELSE\r\n\r\n        IF {last_state} == \"critical\" OR {last_state} == \"warning\" THEN\r\n\r\n            PUBLISH MODEL Alert TO \"alerts/memory/\" + {hostname} WITH\r\n                alert_id = (RANDOM UUID)\r\n                severity = \"INFO\"\r\n                hostname = {hostname}\r\n                metric = \"memory_usage\"\r\n                message = \"INFO: Memory on \" + {hostname} + \" has recovered below \" + {threshold_warning} + \"% threshold\"\r\n                timestamp = {timestamp}\r\n                current_value = {mem_value}\r\n                threshold = {threshold_warning}\r\n\r\n            PUBLISH TOPIC \"alerts/memory/\" + {hostname} + \"/state\" WITH \"ok\"\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": ""
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---\n\n## Part 4: Database Integration - Persistence and Analytics\n\nThe final piece: storing data for historical analysis and real-time dashboards.\n\n### Why TimescaleDB?\n\n**TimescaleDB** is PostgreSQL optimized for time-series data. It provides:\n- ⚡ Fast writes for high-volume metric ingestion\n- 📊 Built-in time-bucketing for aggregations\n- 🔍 SQL query interface (familiar and powerful)\n- 📈 Automatic data retention policies\n\n### The Route Concept\n\nA **ROUTE** in LOT is a connector to external systems. This route:\n1. Listens to MQTT topics\n2. Executes SQL queries when messages arrive\n3. Can run scheduled queries (e.g., every 1 minute)\n4. Publishes query results back to MQTT"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 🗄️ Database Route: The Data Persistence Layer\n\nThis route handles all database interactions - both writes and reads."
+  },
+  {
+    "kind": 2,
+    "language": "lot",
+    "value": "DEFINE ROUTE MetricDatabase WITH TYPE POSTGRESQL\r\n\r\n    ADD SQL_CONFIG\r\n        WITH SERVER \"timescaledb\"\r\n        WITH PORT 5432\r\n        WITH DATABASE \"metrics\"\r\n        WITH USERNAME \"postgres\"\r\n        WITH PASSWORD \"timescale\"\r\n        WITH USE_SSL FALSE\r\n        WITH TRUST_SERVER_CERTIFICATE FALSE\r\n\r\n    ADD EVENT InsertSystemMetric\r\n        WITH QUERY \"INSERT INTO metrics.numeric_timeseries (event_time, hostname, metric_name, value, unit) VALUES ('{payload.json.timestamp} UTC'::timestamptz, '{payload.json.hostname}', '{payload.json.metric}', {payload.json.value}, '{payload.json.unitOfMeasure}')\"\r\n        WITH SOURCE_TOPIC \"metrics/+/system/+\"\r\n\r\n    ADD EVENT QueryMetricAggregates\r\n        WITH EVERY 1 MINUTE\r\n        WITH QUERY \"SELECT hostname, metric_name, (array_agg(ROUND(avg_value::numeric, 2) ORDER BY bucket DESC))[1:5] as avg_values_5min, MAX(unit) as unit FROM (SELECT hostname, metric_name, time_bucket('1 minute', event_time) AS bucket, AVG(value) as avg_value, MAX(unit) as unit FROM metrics.numeric_timeseries WHERE event_time > NOW() - INTERVAL '5 minutes' GROUP BY hostname, metric_name, bucket) AS minute_avgs GROUP BY hostname, metric_name\"\r\n        WITH DESTINATION_TOPIC \"metrics/aggregates/system\"\r\n\r\n    ADD EVENT InsertAlerts\r\n        WITH QUERY \"INSERT INTO metrics.alerts (event_time, severity, hostname, metric, current_value, threshold, message, alert_id) VALUES (NOW(), '{payload.json.severity}', '{payload.json.hostname}', '{payload.json.metric}', {payload.json.current_value}, {payload.json.threshold}, '{payload.json.message}', '{payload.json.alert_id}')\"\r\n        WITH SOURCE_TOPIC \"alerts/+/+\"\r\n"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "### 🔍 Understanding the Aggregation Query\n\nThe `QueryMetricAggregates` event runs every minute to pre-compute rolling statistics:\n\n**Inner Query**: Groups raw data points into 1-minute time buckets and calculates averages.\n\n**Outer Query**: Collects the last 5 minute-averages into an array, ordered newest to oldest.\n\n**Result**: Returns arrays like `[43.2, 42.9, 41.5, 42.1, 43.0]` that can power dashboard visualizations.\n\n**Best Practice**: Pre-aggregating time-series data reduces database query load and provides consistent data granularity for dashboards."
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---\n\n## 🎉 Congratulations!\n\nYou've just built a production-grade IoT monitoring platform! Let's review what you've accomplished:\n\n### ✅ What You Built\n\n1. **5 Data Models** - Type-safe schemas for metrics and alerts\n2. **3 Data Transformers** - Convert raw Glances data to normalized metrics\n3. **2 Alert Monitors** - Intelligent threshold-based anomaly detection\n4. **1 Database Route** - Persistent storage with real-time analytics\n\n### 🌟 Key Takeaways\n\n- **Event-Driven Architecture**: Every action reacts to MQTT topics - no polling, no cron jobs\n- **Declarative Simplicity**: LOT abstracts complexity - you declare what happens, not how\n- **Type Safety**: Models catch errors before they reach production\n- **Edge Computing**: Data processing happens in-stream, not in post-processing\n- **Scalability**: This code handles 1 server or 10,000 servers identically\n\n### 🚀 Next Steps\n\n**Extend This System**:\n- Add disk space monitoring (`glances/+/fs/percent`)\n- Implement alert deduplication (track state between events)\n- Create aggregation dashboards (Grafana integration)\n- Add predictive alerting (ML-based anomaly detection)\n- Implement auto-remediation (restart services on critical alerts)\n\n**Production Hardening**:\n- Use environment variables for database credentials\n- Enable SSL/TLS for database connections\n- Add data retention policies (delete metrics older than 90 days)\n- Implement alert rate limiting (max 1 alert per 5 minutes per host)\n- Add health checks and dead letter queues\n\n### 📚 Further Learning\n\n- **CoreFlux Documentation**: [docs.coreflux.org](https://docs.coreflux.org)\n- **LOT Language Reference**: [docs.coreflux.org/LOT](https://docs.coreflux.org/LOT/)\n- **Official LOT Samples & Tutorials**: [github.com/CorefluxCommunity/LOT-Samples](https://github.com/CorefluxCommunity/LOT-Samples)\n- **TimescaleDB Tutorials**: Time-series best practices\n- **MQTT Deep Dive**: Topic design patterns and QoS levels\n\n---\n\n**Happy IoT Orchestrating!** 🎯"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": "---"
+  },
+  {
+    "kind": 1,
+    "language": "markdown",
+    "value": ""
+  }
+]
