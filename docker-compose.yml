@@ -14,8 +14,10 @@ services:
       - "${HTTPS_PORT:-443}:443"      # Websocket TLS
     
     volumes:
-      - ./config/coreflux/config:/var/lib/coreflux
-      - ./config/coreflux/data:/etc/coreflux
+      # El broker guarda todo su estado en /etc/project (config, logs, stats,
+      # projects, LoT). Volumen nombrado para que Docker lo inicialice con el
+      # contenido de la imagen y persista al recrear el contenedor.
+      - coreflux-data:/etc/project
     
     networks:
       - coreflux-network
@@ -182,6 +184,7 @@ networks:
   coreflux-network:
 
 volumes:
+  coreflux-data:
   timescaledb-data:
   grafana-data:
   hub-data:
