@@ -29,6 +29,30 @@ services:
       retries: 3
       start_period: 40s
 
+  coreflux-hub:
+    image: coreflux/coreflux-hub:${HUB_TAG:-latest}
+    container_name: ${HUB_CONTAINER_NAME:-coreflux-hub}
+    hostname: ${HUB_HOSTNAME:-coreflux-hub}
+    restart: unless-stopped
+
+    ports:
+      - "${HUB_PORT:-3001}:3000"      # Web UI + API + MQTT WebSocket proxy
+
+    volumes:
+      - hub-data:/opt/coreflux-hub/data
+
+    # environment:
+    #   GROQ_API_KEY: ${GROQ_API_KEY}   # Opcional, solo para el AI assistant del HUB
+
+    # El HUB no tiene variable de conexión al broker: se configura desde la UI.
+    # Como hace de proxy desde el contenedor, usar el nombre del servicio:
+    #   mqtt://coreflux-broker:1883  o  ws://coreflux-broker:5000/mqtt
+    networks:
+      - coreflux-network
+
+    depends_on:
+      coreflux-broker: { condition: service_healthy }
+
   coreflux-glances:
     image: nicolargo/glances:${GLANCES_TAG:-latest-full}
     container_name: ${GLANCES_CONTAINER_NAME:-coreflux-glances}
@@ -160,3 +184,4 @@ networks:
 volumes:
   timescaledb-data:
   grafana-data:
+  hub-data:
