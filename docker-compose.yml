@@ -1,7 +1,7 @@
 
 services:
   coreflux-broker:
-    image: coreflux/coreflux-mqtt-broker-t:${COREFLUX_TAG:-latest}
+    image: coreflux/coreflux-mqtt-broker:${COREFLUX_TAG:-latest}
     container_name: ${COREFLUX_CONTAINER_NAME:-coreflux-broker}
     hostname: ${COREFLUX_HOSTNAME:-coreflux-broker}
     restart: unless-stopped
@@ -21,7 +21,9 @@ services:
       - coreflux-network
     
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      # La imagen no incluye shell ni curl; se usa el runtime de Python embebido.
+      # /health se expone en el puerto operacional 9100, no en 5000.
+      test: ["CMD", "/opt/coreflux/python_runtime/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
